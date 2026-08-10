@@ -111,6 +111,8 @@
   #loadBtn{ margin-top:10px; background:var(--signal-green); color:var(--ink);
     border:none; padding:8px 14px; border-radius:5px; font-family:var(--font-data);
     font-weight:600; letter-spacing:.04em; cursor:pointer; text-transform:uppercase; }
+  .filerow{ padding:0 18px 14px; }
+  .filerow input{ font-size:12px; color:var(--muted); }
 </style>
 </head>
 <body>
@@ -127,6 +129,9 @@
     <div class="side-head">
       <h1>Parcel View</h1>
       <p>Walk the street. Tap a label on a building.</p>
+    </div>
+    <div class="filerow">
+      <input type="file" id="fileInput" accept=".geojson,application/geo+json,application/json">
     </div>
     <div class="detail" id="detail">
       <p class="empty">No parcel selected. Move through Street View and click a floating label to inspect a property.</p>
@@ -220,7 +225,7 @@ async function loadGeojson(){
     try{
       const r = await fetch(CONFIG.GEOJSON_URL);
       if(!r.ok){
-        setStatus("Fetch failed: HTTP "+r.status+" for "+CONFIG.GEOJSON_URL);
+        setStatus("Fetch failed: HTTP "+r.status+" for "+CONFIG.GEOJSON_URL+". Use Choose File →");
         console.error("GeoJSON fetch not ok:", r.status, CONFIG.GEOJSON_URL);
         return;
       }
@@ -228,12 +233,12 @@ async function loadGeojson(){
       ingest(data);
       return;
     }catch(e){
-      setStatus("Could not load "+CONFIG.GEOJSON_URL+": "+e.message);
+      setStatus("Could not load "+CONFIG.GEOJSON_URL+": "+e.message+". Use Choose File →");
       console.error("GeoJSON load error:", e);
       return;
     }
   }
-  setStatus("No GEOJSON_URL configured.");
+  setStatus("Pick your parcels.geojson →");
 }
 
 function setStatus(msg){
@@ -244,6 +249,11 @@ function setStatus(msg){
 
 function ingest(fc){
   geojson = fc;
+
+  // Clear labels from any previously loaded GeoJSON.
+  for (const el of labels.values()) el.remove();
+  labels.clear();
+
   centroids = [];
   if(!fc || !Array.isArray(fc.features)){
     setStatus("File loaded but has no 'features' array — is this a GeoJSON FeatureCollection?");
@@ -284,7 +294,13 @@ function ingest(fc){
   refreshLabels();
 }
 
-// (File picker removed — parcels.geojson is loaded automatically from the repo.)
+document.getElementById("fileInput").addEventListener("change", e=>{
+  const file = e.target.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => { try{ ingest(JSON.parse(reader.result)); }
+    catch(err){ setStatus("Could not parse GeoJSON: "+err.message); console.error(err); } };
+  reader.readAsText(file);
+});
 
 // ---- Init Street View ----
 function initApp(){
@@ -322,7 +338,8 @@ function projectToPano(pos){
   while(dh < -180) dh += 360;
 
   // Field of view shrinks as you zoom in (Google zoom 0≈90°, each +1 ≈ half)
-  const fov = 90 / Math.pow(2, pov.zoom || 1);
+  const zoom = Number.isFinite(pov.zoom) ? pov.zoom : 1;
+  const fov = 90 / Math.pow(2, zoom);
   if(Math.abs(dh) > fov/2) return {visible:false}; // outside horizontal view → hide
 
   // Assume label sits above street level, near rooftops; upward pitch.
@@ -377,7 +394,10 @@ function refreshLabels(){
       el.addEventListener("click", ev=>{
         ev.stopPropagation();
         showDetail(item.props);
-        showPopup(item.props, proj);
+        // Re-project at click time. `proj` from element creation may be stale
+        // after the user has moved/rotated/zoomed the panorama.
+        const currentProj = projectToPano(item.c);
+        showPopup(item.props, currentProj);
       });
       stage.appendChild(el);
       labels.set(k, el);
@@ -442,9 +462,14 @@ function showPopup(props, proj){
   const stage = document.getElementById("stage");
   let x = (proj.x||stage.clientWidth/2) + 14;
   let y = (proj.y||stage.clientHeight/2);
-  x = Math.min(x, stage.clientWidth - 300);
-  y = Math.max(10, Math.min(y, stage.clientHeight - 200));
-  pop.style.left = x+"px"; pop.style.top = y+"px";
+  // Clamp after opening so offsetWidth/offsetHeight are available.
+  const margin = 10;
+  const popW = pop.offsetWidth || 280;
+  const popH = pop.offsetHeight || 200;
+  x = Math.max(margin, Math.min(x, stage.clientWidth - popW - margin));
+  y = Math.max(margin, Math.min(y, stage.clientHeight - popH - margin));
+  pop.style.left = x+"px";
+  pop.style.top = y+"px";
 }
 document.getElementById("pop-close").addEventListener("click", ()=>{
   document.getElementById("popup").classList.remove("open");
@@ -452,9 +477,6 @@ document.getElementById("pop-close").addEventListener("click", ()=>{
 
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>(
   {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
-
-// Keep popup anchored while looking around
-["pov_changed","position_changed","zoom_changed"].forEach(()=>{});
 
 loadGoogle();
 </script>
