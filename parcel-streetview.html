@@ -546,14 +546,14 @@
           type="range"
           id="vicinitySlider"
           min="20"
-          max="200"
+          max="300"
           step="5"
           value="80"
           aria-label="Adaptive vicinity buffer in feet">
 
         <div class="vicinity-scale">
           <span>20 ft</span>
-          <span>200 ft</span>
+          <span>300 ft</span>
         </div>
 
         <div class="vicinity-note">
@@ -591,7 +591,7 @@ const CONFIG = {
 
   // Hard maximum search radius for parcel candidates.
   // Google geometry calculations use meters internally.
-  nearbyMeters: 80,
+  nearbyMeters: 100,
 
   // User-facing adaptive vicinity buffer, in FEET.
   // The slider below updates this value live.
