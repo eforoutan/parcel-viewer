@@ -194,6 +194,61 @@
     transform: translateX(-50%);
   }
 
+
+  /* =========================================================
+     ADAPTIVE VICINITY SLIDER
+     ========================================================= */
+  .vicinity-control {
+    padding: 12px 18px 14px;
+    border-bottom: 1px solid var(--chrome-line);
+  }
+
+  .vicinity-control .vicinity-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+    font-family: var(--font-data);
+  }
+
+  .vicinity-control label {
+    color: var(--paper);
+    font-size: 13px;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+  }
+
+  .vicinity-control output {
+    color: var(--signal-green);
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .vicinity-control input[type="range"] {
+    width: 100%;
+    margin: 0;
+    accent-color: var(--signal-green);
+    cursor: pointer;
+  }
+
+  .vicinity-scale {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 5px;
+    color: var(--muted);
+    font-family: var(--font-data);
+    font-size: 11px;
+  }
+
+  .vicinity-note {
+    margin-top: 7px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
   /* =========================================================
      PARCEL DETAIL PANEL
      ========================================================= */
@@ -481,6 +536,31 @@
         <p>Click a parcel label in Street View to inspect the property.</p>
       </div>
 
+      <div class="vicinity-control">
+        <div class="vicinity-head">
+          <label for="vicinitySlider">Adaptive vicinity</label>
+          <output id="vicinityValue" for="vicinitySlider">80 ft</output>
+        </div>
+
+        <input
+          type="range"
+          id="vicinitySlider"
+          min="20"
+          max="200"
+          step="5"
+          value="80"
+          aria-label="Adaptive vicinity buffer in feet">
+
+        <div class="vicinity-scale">
+          <span>20 ft</span>
+          <span>200 ft</span>
+        </div>
+
+        <div class="vicinity-note">
+          Shows parcels within this additional distance beyond the nearest parcel.
+        </div>
+      </div>
+
       <div class="detail" id="detail">
         <p class="empty">
           No parcel selected. First click a location on the map, then click a floating parcel label in Street View.
@@ -509,11 +589,13 @@ const CONFIG = {
   linkFields: ["PC_URL"],
   currencyFields: ["MARKET_VAL"],
 
-  // Hard maximum radius used for parcel candidates.
-  nearbyMeters: 65,
+  // Hard maximum search radius for parcel candidates.
+  // Google geometry calculations use meters internally.
+  nearbyMeters: 80,
 
-  // Only show parcels slightly farther than the closest parcel.
-  vicinityBufferMeters: 25,
+  // User-facing adaptive vicinity buffer, in FEET.
+  // The slider below updates this value live.
+  vicinityBufferFeet: 80,
 
   // Maximum labels displayed at once.
   maxLabels: 8,
@@ -928,6 +1010,13 @@ function projectToPano(pos) {
 }
 
 /* ============================================================
+   DISTANCE HELPERS
+   ============================================================ */
+function feetToMeters(feet) {
+  return feet * 0.3048;
+}
+
+/* ============================================================
    REFRESH VICINITY LABELS
    ============================================================ */
 function refreshLabels() {
@@ -965,10 +1054,13 @@ function refreshLabels() {
   if (near.length) {
     const nearestDistance = near[0].d;
 
+    const adaptiveBufferMeters =
+      feetToMeters(CONFIG.vicinityBufferFeet);
+
     const adaptiveCutoff =
       Math.min(
         CONFIG.nearbyMeters,
-        nearestDistance + CONFIG.vicinityBufferMeters
+        nearestDistance + adaptiveBufferMeters
       );
 
     show =
@@ -979,6 +1071,7 @@ function refreshLabels() {
     console.log(
       "Parcel vicinity:",
       "nearest=", nearestDistance.toFixed(1) + "m",
+      "adaptive buffer=", CONFIG.vicinityBufferFeet + "ft",
       "cutoff=", adaptiveCutoff.toFixed(1) + "m",
       "shown=", show.length
     );
@@ -1310,6 +1403,37 @@ function escapeHtml(value) {
     })[character]
   );
 }
+
+/* ============================================================
+   ADAPTIVE VICINITY SLIDER
+   ============================================================ */
+const vicinitySlider =
+  document.getElementById("vicinitySlider");
+
+const vicinityValue =
+  document.getElementById("vicinityValue");
+
+function updateVicinityFromSlider() {
+  const feet =
+    Number(vicinitySlider.value);
+
+  CONFIG.vicinityBufferFeet =
+    feet;
+
+  vicinityValue.textContent =
+    feet + " ft";
+
+  // Refresh immediately if Street View is active.
+  refreshLabels();
+}
+
+vicinitySlider.addEventListener(
+  "input",
+  updateVicinityFromSlider
+);
+
+// Make the displayed value and CONFIG agree on first load.
+updateVicinityFromSlider();
 
 /* ============================================================
    START
