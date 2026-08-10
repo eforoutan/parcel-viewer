@@ -197,14 +197,27 @@ function showSetup(){
 }
 
 // ---- Turf-free centroid (average of ring vertices, good enough for labels) ----
+// Auto-detects [lng,lat] vs [lat,lng] ordering from the value ranges, since
+// some exports swap the axes. Returns {lat,lng} in true geographic order.
 function centroidOf(geom){
-  let x=0,y=0,n=0;
+  let a=0,b=0,n=0;  // a = first coord component, b = second
   const rings = geom.type === "Polygon" ? geom.coordinates
               : geom.type === "MultiPolygon" ? geom.coordinates.flat() : [];
   for(const ring of rings){
-    for(const [lng,lat] of ring){ x+=lng; y+=lat; n++; }
+    for(const pt of ring){
+      a += pt[0]; b += pt[1]; n++;
+    }
   }
-  return n ? {lng:x/n, lat:y/n} : null;
+  if(!n) return null;
+  a/=n; b/=n;
+  // Decide which is latitude: latitude must be within ±90.
+  // Standard GeoJSON is [lng,lat] so a=lng, b=lat. But if b is out of
+  // lat range and a is in it, the axes are swapped.
+  let lng, lat;
+  if(Math.abs(b) <= 90 && Math.abs(a) <= 180){ lng = a; lat = b; }        // standard [lng,lat]
+  else if(Math.abs(a) <= 90 && Math.abs(b) <= 180){ lng = b; lat = a; }   // swapped [lat,lng]
+  else { return null; }                                                    // truly invalid / projected
+  return {lng, lat};
 }
 
 async function loadGeojson(){
