@@ -211,19 +211,62 @@ async function loadGeojson(){
   if (CONFIG.GEOJSON_URL){
     try{
       const r = await fetch(CONFIG.GEOJSON_URL);
-      if(r.ok){ ingest(await r.json()); return; }
-    }catch(e){ /* fall through to picker */ }
+      if(!r.ok){
+        setStatus("Fetch failed: HTTP "+r.status+" for "+CONFIG.GEOJSON_URL+". Use Choose File →");
+        console.error("GeoJSON fetch not ok:", r.status, CONFIG.GEOJSON_URL);
+        return;
+      }
+      const data = await r.json();
+      ingest(data);
+      return;
+    }catch(e){
+      setStatus("Could not load "+CONFIG.GEOJSON_URL+": "+e.message+". Use Choose File →");
+      console.error("GeoJSON load error:", e);
+      return;
+    }
   }
-  document.getElementById("status").textContent = "Pick your parcels.geojson →";
+  setStatus("Pick your parcels.geojson →");
+}
+
+function setStatus(msg){
+  const s = document.getElementById("status");
+  s.style.display = "block";
+  s.textContent = msg;
 }
 
 function ingest(fc){
   geojson = fc;
   centroids = [];
-  for(const f of fc.features){
-    const c = centroidOf(f.geometry);
-    if(c){ centroids.push({ c, props: f.properties || {} }); }
+  if(!fc || !Array.isArray(fc.features)){
+    setStatus("File loaded but has no 'features' array — is this a GeoJSON FeatureCollection?");
+    console.error("Bad GeoJSON structure:", fc);
+    return;
   }
+  let outOfRange = 0;
+  for(const f of fc.features){
+    if(!f.geometry) continue;
+    const c = centroidOf(f.geometry);
+    if(c){
+      // lat/lng sanity check — catches un-reprojected (projected CRS) data.
+      if(Math.abs(c.lat) > 90 || Math.abs(c.lng) > 180){ outOfRange++; continue; }
+      centroids.push({ c, props: f.properties || {} });
+    }
+  }
+
+  // Diagnostics visible in console.
+  console.log("GeoJSON ingested:", fc.features.length, "features →", centroids.length, "usable centroids");
+  if(centroids.length) console.log("First centroid:", centroids[0].c, "props keys:", Object.keys(centroids[0].props));
+
+  if(outOfRange > 0 && centroids.length === 0){
+    setStatus("Coordinates are out of lat/lng range ("+outOfRange+" parcels). Your GeoJSON isn't in EPSG:4326 — re-export from QGIS as WGS84.");
+    console.error("All centroids out of lat/lng range — data is in a projected CRS, not WGS84.");
+    return;
+  }
+  if(centroids.length === 0){
+    setStatus("No usable parcel geometries found in file.");
+    return;
+  }
+
   document.getElementById("status").style.display = "none";
   // Jump Street View to the first parcel so there's something to see.
   if(centroids.length && panorama){
@@ -237,7 +280,7 @@ document.getElementById("fileInput").addEventListener("change", e=>{
   const file = e.target.files[0]; if(!file) return;
   const reader = new FileReader();
   reader.onload = () => { try{ ingest(JSON.parse(reader.result)); }
-    catch(err){ alert("Could not parse GeoJSON: "+err.message); } };
+    catch(err){ setStatus("Could not parse GeoJSON: "+err.message); console.error(err); } };
   reader.readAsText(file);
 });
 
