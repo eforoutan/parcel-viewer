@@ -33,12 +33,13 @@
 
   /* ---- Panorama pane ---- */
   #stage { position:relative; background:#000; overflow:hidden; }
-  #pano { position:absolute; inset:0; }
+  #pano { position:absolute; inset:0; z-index:0; }
+  #labelLayer { position:absolute; inset:0; z-index:15; pointer-events:none; overflow:hidden; }
 
   /* Attribute label rendered on top of a building in the panorama.
      Positioned by JS via project(). Pointer target = the whole chip. */
   .parcel-label {
-    position:absolute; transform:translate(-50%,-100%);
+    position:absolute; z-index:1; transform:translate(-50%,-100%);
     font-family: var(--font-data); font-weight:600; letter-spacing:.02em;
     background: rgba(16,19,15,.82); color: var(--signal-green);
     border:1px solid var(--signal-dim); border-radius:4px;
@@ -119,6 +120,7 @@
 <div id="app">
   <div id="stage">
     <div id="pano"></div>
+    <div id="labelLayer"></div>
     <div id="status">Loading map…</div>
     <div id="popup">
       <div class="pop-head"><span id="pop-title">Parcel</span><button id="pop-close">×</button></div>
@@ -163,7 +165,7 @@ const CONFIG = {
   currencyFields: ["MARKET_VAL"],
 
   // Only render labels for parcels within this many meters of the camera.
-  nearbyMeters: 90,
+  nearbyMeters: 120,
   // Cap how many labels draw at once (perf).
   maxLabels: 40,
 };
@@ -173,12 +175,12 @@ let panorama, geojson = null, centroids = [], labels = new Map(), map3d = null;
 
 // ---- Load Google Maps script dynamically ----
 function loadGoogle() {
-  if (!CONFIG.API_KEY || CONFIG.API_KEY === "YOUR_API_KEY_HERE") {
+  if (!CONFIG.API_KEY || CONFIG.API_KEY === "AIzaSyA8vvicZvFlziIaZp2rybPIY0eQM3IwlxU") {
     showSetup();
     return;
   }
   const s = document.createElement("script");
-  s.src = `https://maps.googleapis.com/maps/api/js?key=${CONFIG.API_KEY}&callback=initApp&libraries=geometry`;
+  s.src = `https://maps.googleapis.com/maps/api/js?key=${CONFIG.API_KEY}&callback=initApp&libraries=geometry&loading=async`;
   s.async = true;
   s.onerror = () => { document.getElementById("status").textContent = "Failed to load Google Maps. Check API key / billing."; };
   document.head.appendChild(s);
@@ -249,11 +251,8 @@ function setStatus(msg){
 
 function ingest(fc){
   geojson = fc;
-
-  // Clear labels from any previously loaded GeoJSON.
-  for (const el of labels.values()) el.remove();
+  for(const el of labels.values()) el.remove();
   labels.clear();
-
   centroids = [];
   if(!fc || !Array.isArray(fc.features)){
     setStatus("File loaded but has no 'features' array — is this a GeoJSON FeatureCollection?");
@@ -313,6 +312,7 @@ function initApp(){
   panorama.addListener("pov_changed", refreshLabels);
   panorama.addListener("position_changed", refreshLabels);
   panorama.addListener("zoom_changed", refreshLabels);
+  panorama.addListener("pano_changed", refreshLabels);
   document.getElementById("status").textContent = "Loading parcels…";
   loadGeojson();
 }
@@ -339,15 +339,16 @@ function projectToPano(pos){
 
   // Field of view shrinks as you zoom in (Google zoom 0≈90°, each +1 ≈ half)
   const zoom = Number.isFinite(pov.zoom) ? pov.zoom : 1;
-  const fov = 90 / Math.pow(2, zoom);
+  // Street View is about 180° at zoom 0, 90° at zoom 1, 45° at zoom 2.
+  const fov = 180 / Math.pow(2, zoom);
   if(Math.abs(dh) > fov/2) return {visible:false}; // outside horizontal view → hide
 
   // Assume label sits above street level, near rooftops; upward pitch.
-  const targetPitch = 6;               // degrees, keeps labels near building tops
+  const targetPitch = Math.atan2(3, Math.max(dist, 1)) * 180 / Math.PI;
   let dp = targetPitch - pov.pitch;
 
   const x = W/2 + (dh / (fov/2)) * (W/2);
-  const vFov = fov * (H / W);
+  const vFov = 2 * Math.atan(Math.tan((fov/2) * Math.PI/180) * (H/W)) * 180/Math.PI;
   const y = H/2 - (dp / (vFov/2)) * (H/2);
   // Visible only if fully inside the panorama box (never in the side panel).
   const visible = x >= 0 && x <= W && y > -40 && y < H+40;
@@ -357,6 +358,7 @@ function projectToPano(pos){
 function refreshLabels(){
   if(!panorama || !centroids.length) return;
   const stage = document.getElementById("stage");
+  const labelLayer = document.getElementById("labelLayer");
 
   // Determine nearby set, sorted by distance, capped.
   const cam = panorama.getPosition(); if(!cam) return;
@@ -368,6 +370,7 @@ function refreshLabels(){
   }
   near.sort((a,b)=>a.d-b.d);
   const show = near.slice(0, CONFIG.maxLabels);
+  console.log("Parcel labels: nearby=", near.length, "candidates=", show.length, "camera=", cam.lat(), cam.lng(), "pov=", panorama.getPov());
   const showKeys = new Set(show.map(s=>keyFor(s)));
 
   // Remove labels no longer nearby
@@ -394,12 +397,10 @@ function refreshLabels(){
       el.addEventListener("click", ev=>{
         ev.stopPropagation();
         showDetail(item.props);
-        // Re-project at click time. `proj` from element creation may be stale
-        // after the user has moved/rotated/zoomed the panorama.
         const currentProj = projectToPano(item.c);
         showPopup(item.props, currentProj);
       });
-      stage.appendChild(el);
+      labelLayer.appendChild(el);
       labels.set(k, el);
     }
     el.style.display="block";
@@ -462,14 +463,9 @@ function showPopup(props, proj){
   const stage = document.getElementById("stage");
   let x = (proj.x||stage.clientWidth/2) + 14;
   let y = (proj.y||stage.clientHeight/2);
-  // Clamp after opening so offsetWidth/offsetHeight are available.
-  const margin = 10;
-  const popW = pop.offsetWidth || 280;
-  const popH = pop.offsetHeight || 200;
-  x = Math.max(margin, Math.min(x, stage.clientWidth - popW - margin));
-  y = Math.max(margin, Math.min(y, stage.clientHeight - popH - margin));
-  pop.style.left = x+"px";
-  pop.style.top = y+"px";
+  x = Math.min(x, stage.clientWidth - 300);
+  y = Math.max(10, Math.min(y, stage.clientHeight - 200));
+  pop.style.left = x+"px"; pop.style.top = y+"px";
 }
 document.getElementById("pop-close").addEventListener("click", ()=>{
   document.getElementById("popup").classList.remove("open");
