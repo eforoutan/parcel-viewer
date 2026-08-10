@@ -164,10 +164,15 @@ const CONFIG = {
   // Fields formatted as US dollar amounts.
   currencyFields: ["MARKET_VAL"],
 
-  // Only render labels for parcels within this many meters of the camera.
-  nearbyMeters: 120,
-  // Cap how many labels draw at once (perf).
-  maxLabels: 40,
+  // Hard maximum search radius around the Street View camera.
+  nearbyMeters: 65,
+
+  // After finding the closest parcel, only keep parcels within
+  // this many additional meters. This creates an adaptive "immediate vicinity."
+  vicinityBufferMeters: 25,
+
+  // Maximum labels visible at one time.
+  maxLabels: 8,
 };
 /* ============================================================ */
 
@@ -369,8 +374,36 @@ function refreshLabels(){
     if(d <= CONFIG.nearbyMeters) near.push({...item, d});
   }
   near.sort((a,b)=>a.d-b.d);
-  const show = near.slice(0, CONFIG.maxLabels);
-  console.log("Parcel labels: nearby=", near.length, "candidates=", show.length, "camera=", cam.lat(), cam.lng(), "pov=", panorama.getPov());
+
+  // Adaptive vicinity:
+  // If the nearest parcel centroid is 18 m away and the buffer is 25 m,
+  // only parcels within 43 m are considered. This prevents labels from
+  // continuing far down the street while still accommodating different
+  // street widths and parcel depths.
+  let show = [];
+
+  if(near.length){
+    const nearestDistance = near[0].d;
+    const adaptiveCutoff = Math.min(
+      CONFIG.nearbyMeters,
+      nearestDistance + CONFIG.vicinityBufferMeters
+    );
+
+    show = near
+      .filter(item => item.d <= adaptiveCutoff)
+      .slice(0, CONFIG.maxLabels);
+
+    console.log(
+      "Parcel vicinity:",
+      "nearest=", nearestDistance.toFixed(1) + "m",
+      "cutoff=", adaptiveCutoff.toFixed(1) + "m",
+      "within hard radius=", near.length,
+      "shown=", show.length,
+      "camera=", cam.lat(), cam.lng(),
+      "pov=", panorama.getPov()
+    );
+  }
+
   const showKeys = new Set(show.map(s=>keyFor(s)));
 
   // Remove labels no longer nearby
