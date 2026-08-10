@@ -32,7 +32,7 @@
   }
 
   /* ---- Panorama pane ---- */
-  #stage { position:relative; background:#000; }
+  #stage { position:relative; background:#000; overflow:hidden; }
   #pano { position:absolute; inset:0; }
 
   /* Attribute label rendered on top of a building in the panorama.
@@ -96,6 +96,10 @@
   #popup .prow .k{ font-family:var(--font-data); text-transform:uppercase;
     letter-spacing:.04em; color:#6b7358; font-size:12px; }
   #popup .prow .v{ text-align:right; font-weight:500; }
+  #popup .prow .v a{ color:#2b6cb0; font-weight:600; text-decoration:none; }
+  #popup .prow .v a:hover{ text-decoration:underline; }
+  .attr-v a{ color:var(--signal-green); font-weight:600; text-decoration:none; }
+  .attr-v a:hover{ text-decoration:underline; }
 
   /* ---- Loading / status ---- */
   #status { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
@@ -149,9 +153,14 @@ const CONFIG = {
   // 3) Which properties to show, and how. `label` = big text on the building,
   //    `sub` = small text under it. `popupFields` = rows shown in the popup.
   //    Change these strings to match YOUR field names.
-  labelField:  "OWNERNAME",
-  subField:    "OWNZIP",
-  popupFields: ["OWNERNAME", "OWNZIP", "PC_URL", "STNO"],
+  labelField:  "STFULLNAME",
+  subField:    "OWNERNAME",
+  popupFields: ["STFULLNAME", "OWNERNAME", "MARKET_VAL", "PC_URL"],
+
+  // Fields rendered as clickable links that open in a new tab.
+  linkFields:  ["PC_URL"],
+  // Fields formatted as US dollar amounts.
+  currencyFields: ["MARKET_VAL"],
 
   // Only render labels for parcels within this many meters of the camera.
   nearbyMeters: 90,
@@ -271,8 +280,8 @@ function projectToPano(pos){
   const fov = 90 / Math.pow(2, pov.zoom || 1);
   if(Math.abs(dh) > fov/2 + 8) return {visible:false}; // off-screen horizontally
 
-  // Assume label sits slightly above street level; small upward pitch.
-  const targetPitch = 2;               // degrees, keeps labels near building tops
+  // Assume label sits above street level, near rooftops; upward pitch.
+  const targetPitch = 6;               // degrees, keeps labels near building tops
   let dp = targetPitch - pov.pitch;
 
   const x = W/2 + (dh / (fov/2)) * (W/2);
@@ -327,7 +336,10 @@ function refreshLabels(){
       labels.set(k, el);
     }
     el.style.display="block";
-    el.style.left = proj.x + "px";
+    // Clamp so labels stay fully inside the panorama, never under the panel edge.
+    const stageW = stage.clientWidth;
+    const clampedX = Math.max(46, Math.min(proj.x, stageW - 46));
+    el.style.left = clampedX + "px";
     el.style.top  = proj.y + "px";
     // fade distant labels slightly
     el.style.opacity = String(Math.max(0.55, 1 - proj.dist/CONFIG.nearbyMeters));
@@ -339,6 +351,27 @@ function keyFor(item){
 }
 function fmt(v){ return v==null ? "" : String(v); }
 
+// Format a MARKET_VAL-style number as US currency.
+function fmtCurrency(v){
+  const n = Number(String(v).replace(/[^0-9.\-]/g,""));
+  if(!isFinite(n)) return escapeHtml(fmt(v));
+  return "$" + n.toLocaleString("en-US", {maximumFractionDigits:0});
+}
+
+// Render a single attribute value as safe HTML, honoring link/currency config.
+function renderValue(field, value){
+  if(CONFIG.linkFields && CONFIG.linkFields.includes(field)){
+    const url = fmt(value).trim();
+    if(/^https?:\/\//i.test(url)){
+      return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">View record ↗</a>`;
+    }
+  }
+  if(CONFIG.currencyFields && CONFIG.currencyFields.includes(field)){
+    return fmtCurrency(value);
+  }
+  return escapeHtml(fmt(value));
+}
+
 // ---- Side detail panel ----
 function showDetail(props){
   const d = document.getElementById("detail");
@@ -347,7 +380,7 @@ function showDetail(props){
   const fields = CONFIG.popupFields.length ? CONFIG.popupFields : Object.keys(props);
   for(const f of fields){
     if(props[f]==null) continue;
-    html += `<div class="attr-row"><span class="attr-k">${escapeHtml(f)}</span><span class="attr-v">${escapeHtml(fmt(props[f]))}</span></div>`;
+    html += `<div class="attr-row"><span class="attr-k">${escapeHtml(f)}</span><span class="attr-v">${renderValue(f, props[f])}</span></div>`;
   }
   d.innerHTML = html;
 }
@@ -359,7 +392,7 @@ function showPopup(props, proj){
   const body = document.getElementById("pop-body");
   const fields = CONFIG.popupFields.length ? CONFIG.popupFields : Object.keys(props);
   body.innerHTML = fields.filter(f=>props[f]!=null).map(f=>
-    `<div class="prow"><span class="k">${escapeHtml(f)}</span><span class="v">${escapeHtml(fmt(props[f]))}</span></div>`
+    `<div class="prow"><span class="k">${escapeHtml(f)}</span><span class="v">${renderValue(f, props[f])}</span></div>`
   ).join("");
   pop.classList.add("open");
   const stage = document.getElementById("stage");
