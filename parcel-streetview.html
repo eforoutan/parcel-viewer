@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Parcel Street View</title>
+<style>
+  /* ---- Design tokens ----
+     Utility-instrument look: dark chrome frame around a bright photographic
+     panorama. Type is a condensed grotesque for labels/data, so attribute
+     chips read like transit signage sitting on the street. */
+  :root {
+    --ink: #10130f;
+    --chrome: #1c2019;
+    --chrome-line: #333b30;
+    --paper: #f3f1e9;
+    --signal-green: #b6f13c;
+    --signal-dim: #7d8a5e;
+    --muted: #9aa38c;
+    --pop-shadow: 0 12px 40px rgba(0,0,0,.45);
+    --font-data: "Barlow Condensed", "Oswald", system-ui, sans-serif;
+    --font-body: "Inter", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background: var(--ink); color: var(--paper);
+    font-family: var(--font-body); overflow:hidden; }
+
+  #app { display:grid; grid-template-columns: 1fr 340px; height:100vh; }
+  @media (max-width: 820px){
+    #app { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+    #side { border-left:none; border-top:1px solid var(--chrome-line); max-height:38vh; }
+  }
+
+  /* ---- Panorama pane ---- */
+  #stage { position:relative; background:#000; }
+  #pano { position:absolute; inset:0; }
+
+  /* Attribute label rendered on top of a building in the panorama.
+     Positioned by JS via project(). Pointer target = the whole chip. */
+  .parcel-label {
+    position:absolute; transform:translate(-50%,-100%);
+    font-family: var(--font-data); font-weight:600; letter-spacing:.02em;
+    background: rgba(16,19,15,.82); color: var(--signal-green);
+    border:1px solid var(--signal-dim); border-radius:4px;
+    padding:3px 8px 2px; font-size:14px; line-height:1.15; white-space:nowrap;
+    cursor:pointer; backdrop-filter: blur(3px);
+    box-shadow: 0 2px 10px rgba(0,0,0,.5);
+    transition: background .12s, border-color .12s, transform .08s;
+    pointer-events:auto; user-select:none;
+  }
+  .parcel-label:hover { background: var(--signal-green); color: var(--ink);
+    border-color: var(--signal-green); }
+  .parcel-label .sub { display:block; font-size:11px; color:var(--muted);
+    font-weight:500; letter-spacing:.04em; }
+  .parcel-label:hover .sub { color: rgba(16,19,15,.7); }
+  /* little stem pointing down at the building */
+  .parcel-label::after{ content:""; position:absolute; left:50%; top:100%;
+    width:1px; height:14px; background:var(--signal-dim);
+    transform:translateX(-50%); }
+
+  /* ---- Side panel ---- */
+  #side { background: var(--chrome); border-left:1px solid var(--chrome-line);
+    display:flex; flex-direction:column; min-width:0; }
+  .side-head { padding:16px 18px 12px; border-bottom:1px solid var(--chrome-line); }
+  .side-head h1 { margin:0; font-family:var(--font-data); font-weight:600;
+    font-size:19px; letter-spacing:.04em; text-transform:uppercase; }
+  .side-head p { margin:4px 0 0; font-size:12px; color:var(--muted); }
+
+  .detail { padding:16px 18px; overflow:auto; flex:1; }
+  .detail .empty { color:var(--signal-dim); font-size:13px; line-height:1.5;
+    font-family:var(--font-data); letter-spacing:.02em; }
+  .attr-row { display:flex; justify-content:space-between; gap:12px;
+    padding:9px 0; border-bottom:1px solid var(--chrome-line); }
+  .attr-row:last-child{ border-bottom:none; }
+  .attr-k { font-family:var(--font-data); text-transform:uppercase;
+    letter-spacing:.05em; font-size:12px; color:var(--muted); padding-top:2px; }
+  .attr-v { font-size:14px; text-align:right; color:var(--paper); word-break:break-word; }
+  .detail h2 { margin:0 0 10px; font-family:var(--font-data); font-size:16px;
+    letter-spacing:.03em; color:var(--signal-green); }
+
+  /* ---- Popup on the panorama ---- */
+  #popup { position:absolute; z-index:20; min-width:220px; max-width:280px;
+    background: var(--paper); color: var(--ink); border-radius:8px;
+    box-shadow: var(--pop-shadow); display:none; overflow:hidden; }
+  #popup.open{ display:block; }
+  #popup .pop-head { background:var(--ink); color:var(--signal-green);
+    padding:10px 12px; font-family:var(--font-data); font-weight:600;
+    letter-spacing:.03em; display:flex; justify-content:space-between; align-items:center; }
+  #popup .pop-head button{ background:none; border:none; color:var(--muted);
+    font-size:18px; line-height:1; cursor:pointer; padding:0 2px; }
+  #popup .pop-head button:hover{ color:var(--paper); }
+  #popup .pop-body{ padding:8px 12px 12px; }
+  #popup .prow{ display:flex; justify-content:space-between; gap:10px;
+    padding:6px 0; border-bottom:1px solid #ddd9cd; font-size:13px; }
+  #popup .prow:last-child{ border-bottom:none; }
+  #popup .prow .k{ font-family:var(--font-data); text-transform:uppercase;
+    letter-spacing:.04em; color:#6b7358; font-size:12px; }
+  #popup .prow .v{ text-align:right; font-weight:500; }
+
+  /* ---- Loading / status ---- */
+  #status { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    font-family:var(--font-data); letter-spacing:.05em; color:var(--muted);
+    font-size:14px; text-align:center; z-index:5; }
+  .setup { padding:16px 18px; font-size:13px; line-height:1.55; color:var(--muted); }
+  .setup code{ background:var(--ink); color:var(--signal-green); padding:1px 5px;
+    border-radius:3px; font-size:12px; }
+  #loadBtn{ margin-top:10px; background:var(--signal-green); color:var(--ink);
+    border:none; padding:8px 14px; border-radius:5px; font-family:var(--font-data);
+    font-weight:600; letter-spacing:.04em; cursor:pointer; text-transform:uppercase; }
+  .filerow{ padding:0 18px 14px; }
+  .filerow input{ font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <div id="pano"></div>
+    <div id="status">Loading map…</div>
+    <div id="popup">
+      <div class="pop-head"><span id="pop-title">Parcel</span><button id="pop-close">×</button></div>
+      <div class="pop-body" id="pop-body"></div>
+    </div>
+  </div>
+  <aside id="side">
+    <div class="side-head">
+      <h1>Parcel View</h1>
+      <p>Walk the street. Tap a label on a building.</p>
+    </div>
+    <div class="filerow">
+      <input type="file" id="fileInput" accept=".geojson,application/geo+json,application/json">
+    </div>
+    <div class="detail" id="detail">
+      <p class="empty">No parcel selected. Move through Street View and click a floating label to inspect a property.</p>
+    </div>
+  </aside>
+</div>
+
+<script>
+/* ============================================================
+   CONFIG — edit these three things
+   ============================================================ */
+const CONFIG = {
+  // 1) Your Google Maps JS API key (Maps JavaScript API must be enabled)
+  API_KEY: "AIzaSyA8vvicZvFlziIaZp2rybPIY0eQM3IwlxU",
+
+  // 2) Where your parcels.geojson lives. Leave "" to load via the file picker.
+  GEOJSON_URL: "parcels.geojson",
+
+  // 3) Which properties to show, and how. `label` = big text on the building,
+  //    `sub` = small text under it. `popupFields` = rows shown in the popup.
+  //    Change these strings to match YOUR field names.
+  labelField:  "OWNERNAME",
+  subField:    "OWNZIP",
+  popupFields: ["OWNERNAME", "OWNZIP", "PC_URL", "STNO"],
+
+  // Only render labels for parcels within this many meters of the camera.
+  nearbyMeters: 90,
+  // Cap how many labels draw at once (perf).
+  maxLabels: 40,
+};
+/* ============================================================ */
+
+let panorama, geojson = null, centroids = [], labels = new Map(), map3d = null;
+
+// ---- Load Google Maps script dynamically ----
+function loadGoogle() {
+  if (!CONFIG.API_KEY || CONFIG.API_KEY === "YOUR_API_KEY_HERE") {
+    showSetup();
+    return;
+  }
+  const s = document.createElement("script");
+  s.src = `https://maps.googleapis.com/maps/api/js?key=${CONFIG.API_KEY}&callback=initApp&libraries=geometry`;
+  s.async = true;
+  s.onerror = () => { document.getElementById("status").textContent = "Failed to load Google Maps. Check API key / billing."; };
+  document.head.appendChild(s);
+}
+
+function showSetup(){
+  document.getElementById("status").style.display="none";
+  const d = document.getElementById("detail");
+  d.innerHTML = `<div class="setup">
+    Add your Google Maps API key to run.<br><br>
+    Open this file and set <code>API_KEY</code> near the top of the script.
+    Enable the <b>Maps JavaScript API</b> and billing in Google Cloud.<br><br>
+    Then reload. You can load your GeoJSON with the file picker above,
+    or set <code>GEOJSON_URL</code>.
+  </div>`;
+}
+
+// ---- Turf-free centroid (average of ring vertices, good enough for labels) ----
+function centroidOf(geom){
+  let x=0,y=0,n=0;
+  const rings = geom.type === "Polygon" ? geom.coordinates
+              : geom.type === "MultiPolygon" ? geom.coordinates.flat() : [];
+  for(const ring of rings){
+    for(const [lng,lat] of ring){ x+=lng; y+=lat; n++; }
+  }
+  return n ? {lng:x/n, lat:y/n} : null;
+}
+
+async function loadGeojson(){
+  if (CONFIG.GEOJSON_URL){
+    try{
+      const r = await fetch(CONFIG.GEOJSON_URL);
+      if(r.ok){ ingest(await r.json()); return; }
+    }catch(e){ /* fall through to picker */ }
+  }
+  document.getElementById("status").textContent = "Pick your parcels.geojson →";
+}
+
+function ingest(fc){
+  geojson = fc;
+  centroids = [];
+  for(const f of fc.features){
+    const c = centroidOf(f.geometry);
+    if(c){ centroids.push({ c, props: f.properties || {} }); }
+  }
+  document.getElementById("status").style.display = "none";
+  // Jump Street View to the first parcel so there's something to see.
+  if(centroids.length && panorama){
+    const first = centroids[0].c;
+    panorama.setPosition(first);
+  }
+  refreshLabels();
+}
+
+document.getElementById("fileInput").addEventListener("change", e=>{
+  const file = e.target.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => { try{ ingest(JSON.parse(reader.result)); }
+    catch(err){ alert("Could not parse GeoJSON: "+err.message); } };
+  reader.readAsText(file);
+});
+
+// ---- Init Street View ----
+function initApp(){
+  panorama = new google.maps.StreetViewPanorama(
+    document.getElementById("pano"),
+    { position:{lat:40.758, lng:-73.9855}, pov:{heading:90,pitch:0}, zoom:1,
+      addressControl:true, motionTracking:false, fullscreenControl:false }
+  );
+  // Recompute label screen positions whenever the view changes.
+  panorama.addListener("pov_changed", refreshLabels);
+  panorama.addListener("position_changed", refreshLabels);
+  panorama.addListener("zoom_changed", refreshLabels);
+  document.getElementById("status").textContent = "Loading parcels…";
+  loadGeojson();
+}
+window.initApp = initApp;
+
+// ---- Project a lat/lng into panorama screen pixels ----
+// Uses the panorama POV + a spherical model. Returns {x,y,visible}.
+function projectToPano(pos){
+  const p = panorama.getPosition(); if(!p) return {visible:false};
+  const pov = panorama.getPov();
+  const stage = document.getElementById("stage");
+  const W = stage.clientWidth, H = stage.clientHeight;
+
+  // Bearing & distance from camera to target
+  const from = p, to = new google.maps.LatLng(pos.lat, pos.lng);
+  const dist = google.maps.geometry.spherical.computeDistanceBetween(from, to);
+  if(dist > CONFIG.nearbyMeters) return {visible:false};
+  const bearing = google.maps.geometry.spherical.computeHeading(from, to);
+
+  // Horizontal angle relative to where we're looking
+  let dh = bearing - pov.heading;
+  while(dh > 180) dh -= 360;
+  while(dh < -180) dh += 360;
+
+  // Field of view shrinks as you zoom in (Google zoom 0≈90°, each +1 ≈ half)
+  const fov = 90 / Math.pow(2, pov.zoom || 1);
+  if(Math.abs(dh) > fov/2 + 8) return {visible:false}; // off-screen horizontally
+
+  // Assume label sits slightly above street level; small upward pitch.
+  const targetPitch = 2;               // degrees, keeps labels near building tops
+  let dp = targetPitch - pov.pitch;
+
+  const x = W/2 + (dh / (fov/2)) * (W/2);
+  const vFov = fov * (H / W);
+  const y = H/2 - (dp / (vFov/2)) * (H/2);
+  return { x, y, visible: y > -40 && y < H+40, dist };
+}
+
+function refreshLabels(){
+  if(!panorama || !centroids.length) return;
+  const stage = document.getElementById("stage");
+
+  // Determine nearby set, sorted by distance, capped.
+  const cam = panorama.getPosition(); if(!cam) return;
+  const near = [];
+  for(const item of centroids){
+    const d = google.maps.geometry.spherical.computeDistanceBetween(
+      cam, new google.maps.LatLng(item.c.lat, item.c.lng));
+    if(d <= CONFIG.nearbyMeters) near.push({...item, d});
+  }
+  near.sort((a,b)=>a.d-b.d);
+  const show = near.slice(0, CONFIG.maxLabels);
+  const showKeys = new Set(show.map(s=>keyFor(s)));
+
+  // Remove labels no longer nearby
+  for(const [k,el] of labels){
+    if(!showKeys.has(k)){ el.remove(); labels.delete(k); }
+  }
+
+  for(const item of show){
+    const proj = projectToPano(item.c);
+    const k = keyFor(item);
+    let el = labels.get(k);
+    if(!proj.visible){ if(el){ el.style.display="none"; } continue; }
+    if(!el){
+      el = document.createElement("div");
+      el.className = "parcel-label";
+      const main = document.createElement("span");
+      main.textContent = fmt(item.props[CONFIG.labelField]) || "Parcel";
+      el.appendChild(main);
+      if(CONFIG.subField && item.props[CONFIG.subField] != null){
+        const sub = document.createElement("span");
+        sub.className="sub"; sub.textContent = fmt(item.props[CONFIG.subField]);
+        el.appendChild(sub);
+      }
+      el.addEventListener("click", ev=>{
+        ev.stopPropagation();
+        showDetail(item.props);
+        showPopup(item.props, proj);
+      });
+      stage.appendChild(el);
+      labels.set(k, el);
+    }
+    el.style.display="block";
+    el.style.left = proj.x + "px";
+    el.style.top  = proj.y + "px";
+    // fade distant labels slightly
+    el.style.opacity = String(Math.max(0.55, 1 - proj.dist/CONFIG.nearbyMeters));
+  }
+}
+
+function keyFor(item){
+  return (item.props[CONFIG.labelField] ?? "") + ":" + item.c.lat.toFixed(6) + "," + item.c.lng.toFixed(6);
+}
+function fmt(v){ return v==null ? "" : String(v); }
+
+// ---- Side detail panel ----
+function showDetail(props){
+  const d = document.getElementById("detail");
+  const title = fmt(props[CONFIG.labelField]) || "Parcel";
+  let html = `<h2>${escapeHtml(title)}</h2>`;
+  const fields = CONFIG.popupFields.length ? CONFIG.popupFields : Object.keys(props);
+  for(const f of fields){
+    if(props[f]==null) continue;
+    html += `<div class="attr-row"><span class="attr-k">${escapeHtml(f)}</span><span class="attr-v">${escapeHtml(fmt(props[f]))}</span></div>`;
+  }
+  d.innerHTML = html;
+}
+
+// ---- Floating popup on the panorama ----
+function showPopup(props, proj){
+  const pop = document.getElementById("popup");
+  document.getElementById("pop-title").textContent = fmt(props[CONFIG.labelField]) || "Parcel";
+  const body = document.getElementById("pop-body");
+  const fields = CONFIG.popupFields.length ? CONFIG.popupFields : Object.keys(props);
+  body.innerHTML = fields.filter(f=>props[f]!=null).map(f=>
+    `<div class="prow"><span class="k">${escapeHtml(f)}</span><span class="v">${escapeHtml(fmt(props[f]))}</span></div>`
+  ).join("");
+  pop.classList.add("open");
+  const stage = document.getElementById("stage");
+  let x = (proj.x||stage.clientWidth/2) + 14;
+  let y = (proj.y||stage.clientHeight/2);
+  x = Math.min(x, stage.clientWidth - 300);
+  y = Math.max(10, Math.min(y, stage.clientHeight - 200));
+  pop.style.left = x+"px"; pop.style.top = y+"px";
+}
+document.getElementById("pop-close").addEventListener("click", ()=>{
+  document.getElementById("popup").classList.remove("open");
+});
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>(
+  {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+// Keep popup anchored while looking around
+["pov_changed","position_changed","zoom_changed"].forEach(()=>{});
+
+loadGoogle();
+</script>
+</body>
+</html>
