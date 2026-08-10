@@ -278,7 +278,7 @@ function projectToPano(pos){
 
   // Field of view shrinks as you zoom in (Google zoom 0≈90°, each +1 ≈ half)
   const fov = 90 / Math.pow(2, pov.zoom || 1);
-  if(Math.abs(dh) > fov/2 + 8) return {visible:false}; // off-screen horizontally
+  if(Math.abs(dh) > fov/2) return {visible:false}; // outside horizontal view → hide
 
   // Assume label sits above street level, near rooftops; upward pitch.
   const targetPitch = 6;               // degrees, keeps labels near building tops
@@ -287,7 +287,9 @@ function projectToPano(pos){
   const x = W/2 + (dh / (fov/2)) * (W/2);
   const vFov = fov * (H / W);
   const y = H/2 - (dp / (vFov/2)) * (H/2);
-  return { x, y, visible: y > -40 && y < H+40, dist };
+  // Visible only if fully inside the panorama box (never in the side panel).
+  const visible = x >= 0 && x <= W && y > -40 && y < H+40;
+  return { x, y, visible, dist };
 }
 
 function refreshLabels(){
@@ -336,10 +338,7 @@ function refreshLabels(){
       labels.set(k, el);
     }
     el.style.display="block";
-    // Clamp so labels stay fully inside the panorama, never under the panel edge.
-    const stageW = stage.clientWidth;
-    const clampedX = Math.max(46, Math.min(proj.x, stageW - 46));
-    el.style.left = clampedX + "px";
+    el.style.left = proj.x + "px";
     el.style.top  = proj.y + "px";
     // fade distant labels slightly
     el.style.opacity = String(Math.max(0.55, 1 - proj.dist/CONFIG.nearbyMeters));
