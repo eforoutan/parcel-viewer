@@ -111,8 +111,6 @@
   #loadBtn{ margin-top:10px; background:var(--signal-green); color:var(--ink);
     border:none; padding:8px 14px; border-radius:5px; font-family:var(--font-data);
     font-weight:600; letter-spacing:.04em; cursor:pointer; text-transform:uppercase; }
-  .filerow{ padding:0 18px 14px; }
-  .filerow input{ font-size:12px; color:var(--muted); }
 </style>
 </head>
 <body>
@@ -129,9 +127,6 @@
     <div class="side-head">
       <h1>Parcel View</h1>
       <p>Walk the street. Tap a label on a building.</p>
-    </div>
-    <div class="filerow">
-      <input type="file" id="fileInput" accept=".geojson,application/geo+json,application/json">
     </div>
     <div class="detail" id="detail">
       <p class="empty">No parcel selected. Move through Street View and click a floating label to inspect a property.</p>
@@ -225,7 +220,7 @@ async function loadGeojson(){
     try{
       const r = await fetch(CONFIG.GEOJSON_URL);
       if(!r.ok){
-        setStatus("Fetch failed: HTTP "+r.status+" for "+CONFIG.GEOJSON_URL+". Use Choose File →");
+        setStatus("Fetch failed: HTTP "+r.status+" for "+CONFIG.GEOJSON_URL);
         console.error("GeoJSON fetch not ok:", r.status, CONFIG.GEOJSON_URL);
         return;
       }
@@ -233,12 +228,12 @@ async function loadGeojson(){
       ingest(data);
       return;
     }catch(e){
-      setStatus("Could not load "+CONFIG.GEOJSON_URL+": "+e.message+". Use Choose File →");
+      setStatus("Could not load "+CONFIG.GEOJSON_URL+": "+e.message);
       console.error("GeoJSON load error:", e);
       return;
     }
   }
-  setStatus("Pick your parcels.geojson →");
+  setStatus("No GEOJSON_URL configured.");
 }
 
 function setStatus(msg){
@@ -289,13 +284,7 @@ function ingest(fc){
   refreshLabels();
 }
 
-document.getElementById("fileInput").addEventListener("change", e=>{
-  const file = e.target.files[0]; if(!file) return;
-  const reader = new FileReader();
-  reader.onload = () => { try{ ingest(JSON.parse(reader.result)); }
-    catch(err){ setStatus("Could not parse GeoJSON: "+err.message); console.error(err); } };
-  reader.readAsText(file);
-});
+// (File picker removed — parcels.geojson is loaded automatically from the repo.)
 
 // ---- Init Street View ----
 function initApp(){
