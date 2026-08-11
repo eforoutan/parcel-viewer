@@ -170,11 +170,20 @@
     font-size: 11px;
     color: var(--muted);
     font-weight: 500;
-    letter-spacing: .04em;
+    letter-spacing: .02em;
+    text-align: left;
+    margin-top: 2px;
   }
 
-  .parcel-label:hover .sub {
-    color: rgba(16,19,15,.7);
+  .parcel-label .sub .meta-key {
+    color: var(--signal-dim);
+    font-weight: 600;
+    margin-right: 4px;
+  }
+
+  .parcel-label:hover .sub,
+  .parcel-label:hover .sub .meta-key {
+    color: rgba(16,19,15,.72);
   }
 
   .parcel-label::after {
@@ -581,11 +590,20 @@ const CONFIG = {
     "https://property.spatialest.com/ok/payne/#/property/",
 
   labelField: "STFULLNAME",
-  subField: "OWNERNAME",
-  popupFields: ["STFULLNAME", "OWNERNAME", "MARKET_VAL", "PC_URL"],
+  ownerField: "Owner1",
+  yearBuiltField: "YearBuilt",
+  totalValueField: "TotalValue",
+
+  popupFields: [
+    "STFULLNAME",
+    "Owner1",
+    "YearBuilt",
+    "TotalValue",
+    "PC_URL"
+  ],
 
   linkFields: ["PC_URL"],
-  currencyFields: ["MARKET_VAL"],
+  currencyFields: ["TotalValue"],
 
   // Live REST query searches this far around the current Street View camera.
   // Keep this comfortably above the maximum adaptive-vicinity slider value.
@@ -993,13 +1011,33 @@ function normalizeParcelAttributes(attributes) {
       CONFIG.labelField
     );
 
-  const ownerName =
+  /*
+    Requested assessor fields.
+
+    Owner1 / TotalValue are preferred. The older names are only
+    fallbacks so the app remains tolerant if the service schema differs.
+  */
+  const owner1 =
     getAttributeCaseInsensitive(
       attributes,
-      CONFIG.subField
+      CONFIG.ownerField
+    ) ??
+    getAttributeCaseInsensitive(
+      attributes,
+      "OWNERNAME"
     );
 
-  const marketValue =
+  const yearBuilt =
+    getAttributeCaseInsensitive(
+      attributes,
+      CONFIG.yearBuiltField
+    );
+
+  const totalValue =
+    getAttributeCaseInsensitive(
+      attributes,
+      CONFIG.totalValueField
+    ) ??
     getAttributeCaseInsensitive(
       attributes,
       "MARKET_VAL"
@@ -1011,15 +1049,18 @@ function normalizeParcelAttributes(attributes) {
       "PropertyID"
     );
 
-  // Canonical names used everywhere else in the application.
+  // Canonical names used throughout the UI.
   props[CONFIG.labelField] =
     streetName;
 
-  props[CONFIG.subField] =
-    ownerName;
+  props.Owner1 =
+    owner1;
 
-  props.MARKET_VAL =
-    marketValue;
+  props.YearBuilt =
+    yearBuilt;
+
+  props.TotalValue =
+    totalValue;
 
   props.PropertyID =
     propertyId;
@@ -1620,20 +1661,60 @@ function refreshLabels() {
 
       el.appendChild(main);
 
-      if (
-        CONFIG.subField &&
-        item.props[CONFIG.subField] != null
-      ) {
+      const addMetaLine = (label, value) => {
+        if (
+          value == null ||
+          String(value).trim() === ""
+        ) {
+          return;
+        }
+
         const sub =
           document.createElement("span");
 
         sub.className =
           "sub";
 
-        sub.textContent =
-          fmt(item.props[CONFIG.subField]);
+        const keySpan =
+          document.createElement("span");
 
+        keySpan.className =
+          "meta-key";
+
+        keySpan.textContent =
+          label + ":";
+
+        const valueSpan =
+          document.createElement("span");
+
+        valueSpan.textContent =
+          String(value);
+
+        sub.appendChild(keySpan);
+        sub.appendChild(valueSpan);
         el.appendChild(sub);
+      };
+
+      addMetaLine(
+        "Owner",
+        item.props.Owner1
+      );
+
+      addMetaLine(
+        "Year Built",
+        item.props.YearBuilt
+      );
+
+      if (
+        item.props.TotalValue != null &&
+        String(item.props.TotalValue).trim() !== ""
+      ) {
+        addMetaLine(
+          "Total Value",
+          fmtCurrencyText(
+            item.props.TotalValue
+          )
+        );
       }
 
       el.addEventListener("click", event => {
@@ -1721,6 +1802,28 @@ function fmtCurrency(value) {
 
   if (!isFinite(number)) {
     return escapeHtml(fmt(value));
+  }
+
+  return (
+    "$" +
+    number.toLocaleString(
+      "en-US",
+      {
+        maximumFractionDigits: 0
+      }
+    )
+  );
+}
+
+function fmtCurrencyText(value) {
+  const number =
+    Number(
+      String(value)
+        .replace(/[^0-9.\-]/g, "")
+    );
+
+  if (!isFinite(number)) {
+    return fmt(value);
   }
 
   return (
