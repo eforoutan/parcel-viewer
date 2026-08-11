@@ -54,28 +54,22 @@
     inset: 0;
   }
 
-  #mapHint {
+  #addressSearchCard {
     position: absolute;
-    left: 14px;
-    right: 14px;
-    top: 14px;
-    z-index: 5;
-    padding: 10px 12px;
-    background: rgba(16,19,15,.88);
-    color: var(--paper);
-    border: 1px solid var(--chrome-line);
-    border-radius: 6px;
-    box-shadow: 0 4px 18px rgba(0,0,0,.28);
-    font-family: var(--font-data);
-    font-size: 13px;
-    line-height: 1.35;
-    pointer-events: none;
+    top: 12px;
+    left: 12px;
+    right: 12px;
+    z-index: 20;
+    max-width: 430px;
   }
 
-  #mapHint strong {
-    color: var(--signal-green);
+  #addressSearch {
+    width: 100%;
   }
 
+  #addressSearch gmp-place-autocomplete {
+    width: 100%;
+  }
   #rightPanel {
     min-width: 0;
     display: grid;
@@ -499,9 +493,8 @@
   <!-- LEFT 30%: GOOGLE MAP -->
   <section id="mapPanel">
     <div id="map"></div>
-    <div id="mapHint">
-      <strong>Select a location</strong><br>
-      Click a street on the map to open the nearest available Google Street View.
+    <div id="addressSearchCard">
+      <div id="addressSearch"></div>
     </div>
   </section>
 
@@ -647,11 +640,13 @@ function loadGoogle() {
 /* ============================================================
    INIT
    ============================================================ */
-function initApp() {
+async function initApp() {
   initMap();
   initStreetView();
 
   streetViewService = new google.maps.StreetViewService();
+
+  await initAddressSearch();
 
   loadGeojson();
 }
@@ -678,6 +673,98 @@ function initMap() {
     if (!event.latLng) return;
     openStreetViewAt(event.latLng);
   });
+}
+
+/* ============================================================
+   GOOGLE ADDRESS SEARCH
+   ============================================================ */
+async function initAddressSearch() {
+  try {
+    const { PlaceAutocompleteElement } =
+      await google.maps.importLibrary("places");
+
+    const placeAutocomplete =
+      new PlaceAutocompleteElement();
+
+    placeAutocomplete.placeholder =
+      "Search an address...";
+
+    placeAutocomplete.includedRegionCodes =
+      ["us"];
+
+    const searchHost =
+      document.getElementById("addressSearch");
+
+    searchHost.replaceChildren(placeAutocomplete);
+
+    map.addListener("bounds_changed", () => {
+      const bounds = map.getBounds();
+
+      if (bounds) {
+        placeAutocomplete.locationBias =
+          bounds;
+      }
+    });
+
+    placeAutocomplete.addEventListener(
+      "gmp-select",
+      async event => {
+        try {
+          const place =
+            event.placePrediction.toPlace();
+
+          await place.fetchFields({
+            fields: [
+              "displayName",
+              "formattedAddress",
+              "location",
+              "viewport"
+            ]
+          });
+
+          if (!place.location) {
+            setStatus(
+              "No map location was returned for that address."
+            );
+            return;
+          }
+
+          if (place.viewport) {
+            map.fitBounds(place.viewport);
+          } else {
+            map.setCenter(place.location);
+            map.setZoom(18);
+          }
+
+          openStreetViewAt(place.location);
+
+        } catch (error) {
+          console.error(
+            "Address selection error:",
+            error
+          );
+
+          setStatus(
+            "Could not open that address. Please try another search."
+          );
+        }
+      }
+    );
+
+  } catch (error) {
+    console.error(
+      "Google Places address search failed to initialize:",
+      error
+    );
+
+    const searchHost =
+      document.getElementById("addressSearch");
+
+    searchHost.innerHTML =
+      '<div style="background:white;color:#333;padding:10px 12px;border-radius:4px;font-size:13px;">' +
+      'Address search unavailable. Enable Places API (New) for this key.' +
+      '</div>';
+  }
 }
 
 /* ============================================================
