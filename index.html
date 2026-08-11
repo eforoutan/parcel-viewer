@@ -589,6 +589,10 @@ const CONFIG = {
   PROPERTY_URL_BASE:
     "https://property.spatialest.com/ok/payne/#/property/",
 
+  // Payne County boundary GeoJSON hosted beside index.html on GitHub Pages.
+  PAYNE_BOUNDARY_URL:
+    "Payne.geojson",
+
   labelField: "STFULLNAME",
   ownerField: "Owner1",
   yearBuiltField: "YearBuilt",
@@ -674,8 +678,8 @@ async function initApp() {
 
   await initAddressSearch();
 
-  // Fit the left map to the live parcel service when possible.
-  fitMapToParcelExtent();
+  // Load Payne County as a non-clickable gray overlay and fit the map to it.
+  loadPayneBoundary();
 }
 
 window.initApp = initApp;
@@ -701,6 +705,53 @@ function initMap() {
     openStreetViewAt(event.latLng);
   });
 }
+
+/* ============================================================
+   PAYNE COUNTY BOUNDARY OVERLAY
+   ============================================================ */
+function loadPayneBoundary() {
+  map.data.setStyle({
+    fillColor: "#777777",
+    fillOpacity: 0.22,
+    strokeColor: "#555555",
+    strokeOpacity: 0.85,
+    strokeWeight: 1.5,
+    clickable: false
+  });
+
+  map.data.loadGeoJson(
+    CONFIG.PAYNE_BOUNDARY_URL,
+    null,
+    features => {
+      if (!features || !features.length) {
+        console.warn(
+          "Payne.geojson loaded but no features were found."
+        );
+        return;
+      }
+
+      const bounds =
+        new google.maps.LatLngBounds();
+
+      for (const feature of features) {
+        feature.getGeometry().forEachLatLng(
+          latLng => bounds.extend(latLng)
+        );
+      }
+
+      if (!bounds.isEmpty()) {
+        map.fitBounds(bounds, 20);
+      }
+
+      console.log(
+        "Payne County boundary loaded:",
+        features.length,
+        "feature(s)"
+      );
+    }
+  );
+}
+
 
 /* ============================================================
    GOOGLE ADDRESS SEARCH
