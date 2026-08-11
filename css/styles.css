@@ -22,6 +22,116 @@
     overflow: hidden;
   }
 
+  body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* =========================================================
+     APPLICATION HEADER
+     ========================================================= */
+  #appHeader {
+    position: relative;
+    z-index: 100;
+    flex: 0 0 64px;
+    min-height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 0 22px;
+    background:
+      linear-gradient(90deg, #151914 0%, #1c2019 55%, #171b16 100%);
+    border-bottom: 1px solid rgba(182,241,60,.32);
+    box-shadow: 0 5px 20px rgba(0,0,0,.28);
+  }
+
+  #appHeader::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -1px;
+    width: 180px;
+    height: 2px;
+    background: var(--signal-green);
+  }
+
+  .header-brand {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .header-mark {
+    width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    grid-template-rows: repeat(2, 1fr);
+    gap: 3px;
+    padding: 5px;
+    border: 1px solid rgba(182,241,60,.55);
+    border-radius: 7px;
+    background: rgba(182,241,60,.06);
+  }
+
+  .header-mark span {
+    display: block;
+    border-radius: 1px;
+    background: var(--signal-green);
+    opacity: .9;
+  }
+
+  .header-mark span:nth-child(2),
+  .header-mark span:nth-child(3) {
+    opacity: .4;
+  }
+
+  .header-copy {
+    min-width: 0;
+  }
+
+  .header-eyebrow {
+    margin-bottom: 2px;
+    font-family: var(--font-data);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: .16em;
+    color: var(--signal-green);
+  }
+
+  #appHeader h1 {
+    margin: 0;
+    color: var(--paper);
+    font-family: var(--font-data);
+    font-size: 21px;
+    font-weight: 600;
+    letter-spacing: .025em;
+    line-height: 1.05;
+    white-space: nowrap;
+  }
+
+  .header-meta {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: var(--muted);
+    font-family: var(--font-data);
+    font-size: 11px;
+    letter-spacing: .045em;
+    white-space: nowrap;
+  }
+
+  .header-dot {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--signal-green);
+    opacity: .7;
+  }
+
   /* =========================================================
      MAIN LAYOUT
      Left 30%  = Google Map
@@ -30,7 +140,8 @@
   #app {
     display: grid;
     grid-template-columns: 30% 70%;
-    height: 100vh;
+    flex: 1 1 auto;
+    min-height: 0;
     width: 100vw;
   }
 
@@ -459,14 +570,39 @@
 
   @media (max-width: 760px) {
     html, body {
-      overflow: auto;
+      overflow: hidden;
+    }
+
+    #appHeader {
+      flex-basis: 58px;
+      min-height: 58px;
+      padding: 0 14px;
+    }
+
+    #appHeader h1 {
+      font-size: 17px;
+    }
+
+    .header-eyebrow {
+      font-size: 8px;
+    }
+
+    .header-mark {
+      width: 28px;
+      height: 28px;
+      flex-basis: 28px;
+    }
+
+    .header-meta {
+      display: none;
     }
 
     #app {
       display: grid;
       grid-template-columns: 1fr;
-      grid-template-rows: 38vh 62vh;
-      height: 100vh;
+      grid-template-rows: 38% 62%;
+      flex: 1 1 auto;
+      min-height: 0;
     }
 
     #mapPanel {
