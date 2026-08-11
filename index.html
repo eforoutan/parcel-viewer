@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Parcel Map + Street View</title>
+
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+
+<body>
+<div id="app">
+
+  <!-- LEFT 30%: GOOGLE MAP -->
+  <section id="mapPanel">
+    <div id="map"></div>
+    <div id="addressSearchCard">
+      <div id="addressSearch"></div>
+    </div>
+  </section>
+
+  <!-- RIGHT 70%: STREET VIEW + PARCEL DATA -->
+  <section id="rightPanel">
+
+    <div id="stage">
+      <div id="pano"></div>
+      <div id="labelLayer"></div>
+
+      <div id="streetPlaceholder">
+        <div class="message">
+          <strong>No Street View Selected</strong>
+          Click a location on the map to the left. The nearest available Street View panorama will open here, and nearby parcel labels will appear automatically.
+        </div>
+      </div>
+
+      <div id="status"></div>
+
+      <div id="popup">
+        <div class="pop-head">
+          <span id="pop-title">Parcel</span>
+          <button id="pop-close" aria-label="Close">×</button>
+        </div>
+        <div class="pop-body" id="pop-body"></div>
+      </div>
+    </div>
+
+    <aside id="detailPanel">
+      <div class="side-head">
+        <h1>Parcel View</h1>
+        <p>Click a parcel label in Street View to inspect the property.</p>
+      </div>
+
+      <div class="vicinity-control">
+        <div class="vicinity-head">
+          <label for="vicinitySlider">Adaptive vicinity</label>
+          <output id="vicinityValue" for="vicinitySlider">80 ft</output>
+        </div>
+
+        <input
+          type="range"
+          id="vicinitySlider"
+          min="20"
+          max="300"
+          step="5"
+          value="80"
+          aria-label="Adaptive vicinity buffer in feet">
+
+        <div class="vicinity-scale">
+          <span>20 ft</span>
+          <span>300 ft</span>
+        </div>
+
+        <div class="vicinity-note">
+          Shows parcels within this additional distance beyond the nearest parcel.
+        </div>
+      </div>
+
+      <div class="detail" id="detail">
+        <p class="empty">
+          No parcel selected. First click a location on the map, then click a floating parcel label in Street View.
+        </p>
+      </div>
+    </aside>
+
+  </section>
+
+</div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
