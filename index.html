@@ -572,8 +572,13 @@
 const CONFIG = {
   API_KEY: "AIzaSyA8vvicZvFlziIaZp2rybPIY0eQM3IwlxU",
 
-  // GeoJSON is loaded automatically. No file picker.
-  GEOJSON_URL: "parcels.geojson",
+  // Live Payne County Assessor parcel layer.
+  PARCEL_LAYER_URL:
+    "https://pro.paynecountyassessor.org/arcgis/rest/services/PayneParcels_2025/MapServer/0",
+
+  // Property page URL. PropertyID is appended automatically.
+  PROPERTY_URL_BASE:
+    "https://property.spatialest.com/ok/payne/#/property/",
 
   labelField: "STFULLNAME",
   subField: "OWNERNAME",
@@ -582,18 +587,17 @@ const CONFIG = {
   linkFields: ["PC_URL"],
   currencyFields: ["MARKET_VAL"],
 
-  // Hard maximum search radius for parcel candidates.
-  // Google geometry calculations use meters internally.
-  nearbyMeters: 100,
+  // Live REST query searches this far around the current Street View camera.
+  // Keep this comfortably above the maximum adaptive-vicinity slider value.
+  parcelQueryRadiusFeet: 500,
 
   // User-facing adaptive vicinity buffer, in FEET.
-  // The slider below updates this value live.
   vicinityBufferFeet: 80,
 
   // Maximum labels displayed at once.
   maxLabels: 8,
 
-  // Search radius for Street View imagery after a map click.
+  // Search radius for Street View imagery after a map click, in meters.
   streetViewSearchRadius: 100
 };
 
@@ -605,11 +609,15 @@ let panorama = null;
 let streetViewService = null;
 let mapClickMarker = null;
 
-let geojson = null;
 let centroids = [];
 let labels = new Map();
 
 let streetViewReady = false;
+
+// Live parcel-query state.
+let parcelQueryTimer = null;
+let parcelQuerySequence = 0;
+let lastParcelQueryPosition = null;
 
 /* ============================================================
    LOAD GOOGLE MAPS
@@ -648,7 +656,8 @@ async function initApp() {
 
   await initAddressSearch();
 
-  loadGeojson();
+  // Fit the left map to the live parcel service when possible.
+  fitMapToParcelExtent();
 }
 
 window.initApp = initApp;
@@ -789,8 +798,13 @@ function initStreetView() {
   panorama.addListener("pov_changed", refreshLabels);
 
   panorama.addListener("position_changed", () => {
-    refreshLabels();
     syncMapWithStreetView();
+
+    const pos = panorama.getPosition();
+
+    if (pos) {
+      scheduleParcelQuery(pos);
+    }
   });
 
   panorama.addListener("zoom_changed", refreshLabels);
@@ -852,7 +866,14 @@ function openStreetViewAt(latLng) {
 
       hideStatus();
 
-      window.setTimeout(refreshLabels, 250);
+      // Query live parcel data at the actual Street View camera position.
+      window.setTimeout(() => {
+        const currentPos = panorama.getPosition();
+
+        if (currentPos) {
+          queryNearbyParcels(currentPos, true);
+        }
+      }, 150);
     }
   );
 }
@@ -878,130 +899,510 @@ function syncMapWithStreetView() {
 }
 
 /* ============================================================
-   GEOJSON
+   LIVE PAYNE COUNTY PARCEL SERVICE
    ============================================================ */
-async function loadGeojson() {
-  try {
-    const response = await fetch(CONFIG.GEOJSON_URL);
 
-    if (!response.ok) {
-      throw new Error(
-        `HTTP ${response.status} while loading ${CONFIG.GEOJSON_URL}`
-      );
-    }
+/*
+  The parcel service returns Esri JSON polygons:
+    geometry.rings = [
+      [[x,y], [x,y], ...]
+    ]
 
-    const data = await response.json();
-    ingest(data);
-
-  } catch (error) {
-    console.error("GeoJSON load error:", error);
-    setStatus("Could not load parcels.geojson: " + error.message);
+  outSR=4326 makes x=longitude and y=latitude.
+*/
+function centroidOfEsriPolygon(geometry) {
+  if (!geometry || !Array.isArray(geometry.rings)) {
+    return null;
   }
-}
 
-/* ============================================================
-   CENTROID
-   ============================================================ */
-function centroidOf(geom) {
-  let a = 0;
-  let b = 0;
+  let lngSum = 0;
+  let latSum = 0;
   let n = 0;
 
-  const rings =
-    geom.type === "Polygon"
-      ? geom.coordinates
-      : geom.type === "MultiPolygon"
-        ? geom.coordinates.flat()
-        : [];
+  for (const ring of geometry.rings) {
+    if (!Array.isArray(ring)) continue;
 
-  for (const ring of rings) {
-    for (const pt of ring) {
-      a += pt[0];
-      b += pt[1];
+    for (const point of ring) {
+      if (!Array.isArray(point) || point.length < 2) continue;
+
+      const lng = Number(point[0]);
+      const lat = Number(point[1]);
+
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+
+      lngSum += lng;
+      latSum += lat;
       n++;
     }
   }
 
   if (!n) return null;
 
-  a /= n;
-  b /= n;
+  const lng = lngSum / n;
+  const lat = latSum / n;
 
-  let lng;
-  let lat;
-
-  if (Math.abs(b) <= 90 && Math.abs(a) <= 180) {
-    lng = a;
-    lat = b;
-  }
-  else if (Math.abs(a) <= 90 && Math.abs(b) <= 180) {
-    lng = b;
-    lat = a;
-  }
-  else {
+  if (
+    Math.abs(lat) > 90 ||
+    Math.abs(lng) > 180
+  ) {
     return null;
   }
 
   return { lng, lat };
 }
 
-/* ============================================================
-   INGEST GEOJSON
-   ============================================================ */
-function ingest(fc) {
-  geojson = fc;
 
-  for (const el of labels.values()) {
-    el.remove();
+/*
+  ArcGIS field names are usually stable, but this makes the app
+  tolerant of capitalization differences such as PropertyID vs PROPERTYID.
+*/
+function getAttributeCaseInsensitive(attributes, wantedName) {
+  if (!attributes || !wantedName) return null;
+
+  if (Object.prototype.hasOwnProperty.call(attributes, wantedName)) {
+    return attributes[wantedName];
   }
 
-  labels.clear();
-  centroids = [];
+  const wanted =
+    String(wantedName).toLowerCase();
 
-  if (!fc || !Array.isArray(fc.features)) {
-    setStatus("parcels.geojson is not a valid GeoJSON FeatureCollection.");
+  for (const key of Object.keys(attributes)) {
+    if (key.toLowerCase() === wanted) {
+      return attributes[key];
+    }
+  }
+
+  return null;
+}
+
+
+/*
+  Creates the canonical properties used by the existing UI.
+
+  PC_URL does NOT need to exist in the assessor layer.
+  It is generated from PropertyID.
+*/
+function normalizeParcelAttributes(attributes) {
+  const props = {
+    ...(attributes || {})
+  };
+
+  const streetName =
+    getAttributeCaseInsensitive(
+      attributes,
+      CONFIG.labelField
+    );
+
+  const ownerName =
+    getAttributeCaseInsensitive(
+      attributes,
+      CONFIG.subField
+    );
+
+  const marketValue =
+    getAttributeCaseInsensitive(
+      attributes,
+      "MARKET_VAL"
+    );
+
+  const propertyId =
+    getAttributeCaseInsensitive(
+      attributes,
+      "PropertyID"
+    );
+
+  // Canonical names used everywhere else in the application.
+  props[CONFIG.labelField] =
+    streetName;
+
+  props[CONFIG.subField] =
+    ownerName;
+
+  props.MARKET_VAL =
+    marketValue;
+
+  props.PropertyID =
+    propertyId;
+
+  const cleanPropertyId =
+    propertyId == null
+      ? ""
+      : String(propertyId).trim();
+
+  props.PC_URL =
+    cleanPropertyId
+      ? CONFIG.PROPERTY_URL_BASE +
+        encodeURIComponent(cleanPropertyId)
+      : "";
+
+  return props;
+}
+
+
+/*
+  Build a rectangular query envelope around the Street View camera.
+
+  We use an envelope instead of ArcGIS's distance parameter so the app
+  does not depend on the layer advertising supportsQueryWithDistance.
+*/
+function buildQueryEnvelope(position, radiusFeet) {
+  const lat =
+    typeof position.lat === "function"
+      ? position.lat()
+      : Number(position.lat);
+
+  const lng =
+    typeof position.lng === "function"
+      ? position.lng()
+      : Number(position.lng);
+
+  const radiusMeters =
+    feetToMeters(radiusFeet);
+
+  // Approximate meters per degree at the camera latitude.
+  const latDegrees =
+    radiusMeters / 111320;
+
+  const cosLat =
+    Math.max(
+      0.01,
+      Math.cos(lat * Math.PI / 180)
+    );
+
+  const lngDegrees =
+    radiusMeters /
+    (111320 * cosLat);
+
+  return {
+    xmin: lng - lngDegrees,
+    ymin: lat - latDegrees,
+    xmax: lng + lngDegrees,
+    ymax: lat + latDegrees
+  };
+}
+
+
+/*
+  Avoid hammering the public REST service while Street View is moving.
+*/
+function scheduleParcelQuery(position) {
+  if (!streetViewReady || !position) return;
+
+  window.clearTimeout(parcelQueryTimer);
+
+  parcelQueryTimer =
+    window.setTimeout(() => {
+      queryNearbyParcels(position);
+    }, 220);
+}
+
+
+/*
+  Query only parcels near the CURRENT Street View camera.
+
+  This replaces loading every parcel in the county into the browser.
+*/
+async function queryNearbyParcels(position, force = false) {
+  if (!streetViewReady || !position) return;
+
+  const lat =
+    typeof position.lat === "function"
+      ? position.lat()
+      : Number(position.lat);
+
+  const lng =
+    typeof position.lng === "function"
+      ? position.lng()
+      : Number(position.lng);
+
+  if (
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lng)
+  ) {
     return;
   }
 
-  const bounds = new google.maps.LatLngBounds();
+  /*
+    If Street View fires the same position repeatedly, avoid repeating
+    the same REST request. "force" is used when a new panorama is opened.
+  */
+  if (
+    !force &&
+    lastParcelQueryPosition
+  ) {
+    const previous =
+      new google.maps.LatLng(
+        lastParcelQueryPosition.lat,
+        lastParcelQueryPosition.lng
+      );
 
-  for (const feature of fc.features) {
-    if (!feature.geometry) continue;
+    const current =
+      new google.maps.LatLng(
+        lat,
+        lng
+      );
 
-    const c = centroidOf(feature.geometry);
+    const movedMeters =
+      google.maps.geometry.spherical
+        .computeDistanceBetween(
+          previous,
+          current
+        );
+
+    // Less than roughly 10 feet: keep the already-loaded parcel set.
+    if (movedMeters < 3) {
+      refreshLabels();
+      return;
+    }
+  }
+
+  lastParcelQueryPosition = {
+    lat,
+    lng
+  };
+
+  const requestSequence =
+    ++parcelQuerySequence;
+
+  const envelope =
+    buildQueryEnvelope(
+      { lat, lng },
+      CONFIG.parcelQueryRadiusFeet
+    );
+
+  const params =
+    new URLSearchParams({
+      f: "json",
+      where: "1=1",
+      geometry:
+        [
+          envelope.xmin,
+          envelope.ymin,
+          envelope.xmax,
+          envelope.ymax
+        ].join(","),
+      geometryType:
+        "esriGeometryEnvelope",
+      inSR:
+        "4326",
+      spatialRel:
+        "esriSpatialRelIntersects",
+
+      // Request all attributes so small naming differences do not break the app.
+      outFields:
+        "*",
+
+      returnGeometry:
+        "true",
+      outSR:
+        "4326",
+      returnZ:
+        "false",
+      returnM:
+        "false"
+    });
+
+  const queryUrl =
+    CONFIG.PARCEL_LAYER_URL +
+    "/query?" +
+    params.toString();
+
+  setStatus("Loading nearby parcel data…");
+
+  try {
+    const response =
+      await fetch(
+        queryUrl,
+        {
+          method: "GET",
+          mode: "cors"
+        }
+      );
+
+    if (!response.ok) {
+      throw new Error(
+        "Parcel service returned HTTP " +
+        response.status
+      );
+    }
+
+    const data =
+      await response.json();
+
+    if (data && data.error) {
+      const message =
+        data.error.message ||
+        "ArcGIS parcel query failed.";
+
+      throw new Error(message);
+    }
+
+    /*
+      Ignore an older response if the user moved and a newer request
+      has already started.
+    */
+    if (
+      requestSequence !==
+      parcelQuerySequence
+    ) {
+      return;
+    }
+
+    ingestArcgisFeatures(
+      Array.isArray(data.features)
+        ? data.features
+        : []
+    );
+
+    hideStatus();
+
+  } catch (error) {
+    console.error(
+      "Payne County parcel query failed:",
+      error
+    );
+
+    if (
+      requestSequence ===
+      parcelQuerySequence
+    ) {
+      centroids = [];
+
+      clearLabelElements();
+
+      setStatus(
+        "Could not load Payne County parcel data: " +
+        error.message
+      );
+    }
+  }
+}
+
+
+/*
+  Convert the nearby ArcGIS REST features into the same lightweight
+  centroid/property objects used by the Street View label renderer.
+*/
+function ingestArcgisFeatures(features) {
+  centroids = [];
+
+  clearLabelElements();
+
+  for (const feature of features) {
+    if (!feature || !feature.geometry) continue;
+
+    const c =
+      centroidOfEsriPolygon(
+        feature.geometry
+      );
 
     if (!c) continue;
 
-    if (Math.abs(c.lat) > 90 || Math.abs(c.lng) > 180) continue;
+    const props =
+      normalizeParcelAttributes(
+        feature.attributes || {}
+      );
 
     centroids.push({
       c,
-      props: feature.properties || {}
+      props
     });
-
-    bounds.extend(c);
   }
 
   console.log(
-    "GeoJSON ingested:",
-    fc.features.length,
+    "Live Payne parcel query:",
+    features.length,
     "features ->",
     centroids.length,
     "usable parcel centroids"
   );
 
-  if (!centroids.length) {
-    setStatus("No usable parcel geometries were found.");
-    return;
+  refreshLabels();
+}
+
+
+/*
+  Fit the initial LEFT Google Map to the parcel layer's live extent.
+  If the extent request fails, the map simply stays at its configured center.
+*/
+async function fitMapToParcelExtent() {
+  const params =
+    new URLSearchParams({
+      f: "json",
+      where: "1=1",
+      returnExtentOnly: "true",
+      returnGeometry: "false",
+      outSR: "4326"
+    });
+
+  const url =
+    CONFIG.PARCEL_LAYER_URL +
+    "/query?" +
+    params.toString();
+
+  try {
+    const response =
+      await fetch(
+        url,
+        {
+          method: "GET",
+          mode: "cors"
+        }
+      );
+
+    if (!response.ok) {
+      throw new Error(
+        "HTTP " +
+        response.status
+      );
+    }
+
+    const data =
+      await response.json();
+
+    if (
+      data.error ||
+      !data.extent
+    ) {
+      throw new Error(
+        data.error?.message ||
+        "No layer extent returned."
+      );
+    }
+
+    const extent =
+      data.extent;
+
+    if (
+      [extent.xmin, extent.ymin, extent.xmax, extent.ymax]
+        .every(Number.isFinite)
+    ) {
+      map.fitBounds({
+        west: extent.xmin,
+        south: extent.ymin,
+        east: extent.xmax,
+        north: extent.ymax
+      });
+    }
+
+  } catch (error) {
+    console.warn(
+      "Could not fit map to live parcel extent:",
+      error
+    );
+  }
+}
+
+
+/*
+  Remove rendered labels without touching the newly queried feature list.
+*/
+function clearLabelElements() {
+  for (const el of labels.values()) {
+    el.remove();
   }
 
-  // Instead of opening Street View at an arbitrary/default parcel,
-  // fit the LEFT Google Map to the parcel dataset.
-  if (map && !bounds.isEmpty()) {
-    map.fitBounds(bounds, 28);
-  }
-
-  hideStatus();
+  labels.clear();
 }
 
 /* ============================================================
@@ -1029,7 +1430,12 @@ function projectToPano(pos) {
   const dist =
     google.maps.geometry.spherical.computeDistanceBetween(p, to);
 
-  if (dist > CONFIG.nearbyMeters) {
+  const hardRadiusMeters =
+    feetToMeters(
+      CONFIG.parcelQueryRadiusFeet
+    );
+
+  if (dist > hardRadiusMeters) {
     return { visible: false, dist };
   }
 
@@ -1118,6 +1524,11 @@ function refreshLabels() {
 
   const near = [];
 
+  const hardRadiusMeters =
+    feetToMeters(
+      CONFIG.parcelQueryRadiusFeet
+    );
+
   for (const item of centroids) {
     const d =
       google.maps.geometry.spherical.computeDistanceBetween(
@@ -1125,7 +1536,7 @@ function refreshLabels() {
         new google.maps.LatLng(item.c.lat, item.c.lng)
       );
 
-    if (d <= CONFIG.nearbyMeters) {
+    if (d <= hardRadiusMeters) {
       near.push({
         ...item,
         d
@@ -1146,7 +1557,7 @@ function refreshLabels() {
 
     const adaptiveCutoff =
       Math.min(
-        CONFIG.nearbyMeters,
+        hardRadiusMeters,
         nearestDistance + adaptiveBufferMeters
       );
 
@@ -1256,7 +1667,7 @@ function refreshLabels() {
       String(
         Math.max(
           0.55,
-          1 - proj.dist / CONFIG.nearbyMeters
+          1 - proj.dist / hardRadiusMeters
         )
       );
   }
@@ -1276,11 +1687,10 @@ function clearParcelSelection() {
       Street View location selected. Click a floating parcel label to inspect the property.
     </p>`;
 
-  for (const el of labels.values()) {
-    el.remove();
-  }
+  centroids = [];
+  lastParcelQueryPosition = null;
 
-  labels.clear();
+  clearLabelElements();
 }
 
 /* ============================================================
@@ -1510,8 +1920,19 @@ function updateVicinityFromSlider() {
   vicinityValue.textContent =
     feet + " ft";
 
-  // Refresh immediately if Street View is active.
-  refreshLabels();
+  // The live REST query keeps a larger parcel window cached.
+  // Re-filter those nearby parcels immediately as the slider moves.
+  if (streetViewReady && panorama) {
+    if (centroids.length) {
+      refreshLabels();
+    } else {
+      const pos = panorama.getPosition();
+
+      if (pos) {
+        scheduleParcelQuery(pos);
+      }
+    }
+  }
 }
 
 vicinitySlider.addEventListener(
